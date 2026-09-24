@@ -1,6 +1,6 @@
 import os
-import smtplib
-from email.message import EmailMessage
+import json
+import urllib.request
 from datetime import datetime, timezone
 
 from flask import Flask, jsonify, request
@@ -21,20 +21,40 @@ supabase = create_client(
 
 def send_email(to_email, subject, body):
     try:
-        message = EmailMessage()
-        message["From"] = os.getenv("GMAIL_EMAIL")
-        message["To"] = to_email
-        message["Subject"] = subject
-        message.set_content(body)
+        url = os.getenv("GMAIL_RELAY_URL")
+        token = os.getenv("GMAIL_RELAY_TOKEN")
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(
-                os.getenv("GMAIL_EMAIL"),
-                os.getenv("GMAIL_APP_PASSWORD")
+        if not url or not token:
+            return False, "Gmail relay configuration is missing"
+
+        payload = json.dumps({
+            "token": token,
+            "to": to_email,
+            "subject": subject,
+            "body": body
+        }).encode("utf-8")
+
+        email_request = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Content-Type": "application/json"
+            },
+            method="POST"
+        )
+
+        with urllib.request.urlopen(email_request, timeout=30) as response:
+            result = json.loads(
+                response.read().decode("utf-8")
             )
-            smtp.send_message(message)
 
-        return True, None
+        if result.get("success"):
+            return True, None
+
+        return False, result.get(
+            "error",
+            "Email relay failed"
+        )
 
     except Exception as e:
         return False, str(e)
@@ -42,20 +62,27 @@ def send_email(to_email, subject, body):
 
 @app.get("/")
 def home():
-    return jsonify({"message": "Hairdrama Task Manager API is running"})
+    return jsonify({
+        "message": "Hairdrama Task Manager API is running"
+    })
 
 
 @app.get("/users")
 def get_users():
     try:
-        response = supabase.table("profiles").select(
-            "id, email, full_name"
-        ).execute()
+        response = (
+            supabase
+            .table("profiles")
+            .select("id, email, full_name")
+            .execute()
+        )
 
         return jsonify(response.data), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 
 @app.get("/tasks")
@@ -64,20 +91,27 @@ def get_tasks():
         user_id = request.args.get("user_id")
 
         if not user_id:
-            return jsonify({"error": "user_id is required"}), 400
+            return jsonify({
+                "error": "user_id is required"
+            }), 400
 
-        response = supabase.table("tasks").select(
-            "*"
-        ).or_(
-            f"created_by.eq.{user_id},assigned_to.eq.{user_id}"
-        ).order(
-            "created_at", desc=True
-        ).execute()
+        response = (
+            supabase
+            .table("tasks")
+            .select("*")
+            .or_(
+                f"created_by.eq.{user_id},assigned_to.eq.{user_id}"
+            )
+            .order("created_at", desc=True)
+            .execute()
+        )
 
         return jsonify(response.data), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 
 @app.post("/tasks")
@@ -95,24 +129,35 @@ def create_task():
                 "error": "title, assigned_to and created_by are required"
             }), 400
 
-        response = supabase.table("tasks").insert({
-            "title": title,
-            "description": description,
-            "assigned_to": assigned_to,
-            "created_by": created_by,
-            "status": "pending"
-        }).execute()
+        response = (
+            supabase
+            .table("tasks")
+            .insert({
+                "title": title,
+                "description": description,
+                "assigned_to": assigned_to,
+                "created_by": created_by,
+                "status": "pending"
+            })
+            .execute()
+        )
 
         task = response.data[0]
 
-        assigned_user = supabase.table("profiles").select(
-            "email, full_name"
-        ).eq(
-            "id", assigned_to
-        ).single().execute()
+        assigned_user = (
+            supabase
+            .table("profiles")
+            .select("email, full_name")
+            .eq("id", assigned_to)
+            .single()
+            .execute()
+        )
 
         assigned_email = assigned_user.data["email"]
-        assigned_name = assigned_user.data.get("full_name") or "User"
+        assigned_name = (
+            assigned_user.data.get("full_name")
+            or "User"
+        )
 
         subject = "New Task Assigned - Hairdrama Task Manager"
 
@@ -144,17 +189,24 @@ Hairdrama Task Manager
         }), 201
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 
 @app.patch("/tasks/<task_id>/complete")
 def complete_task(task_id):
     try:
-        existing_task = supabase.table("tasks").select(
-            "id, title, description, assigned_to, created_by, status"
-        ).eq(
-            "id", task_id
-        ).single().execute()
+        existing_task = (
+            supabase
+            .table("tasks")
+            .select(
+                "id, title, description, assigned_to, created_by, status"
+            )
+            .eq("id", task_id)
+            .single()
+            .execute()
+        )
 
         task = existing_task.data
 
@@ -163,23 +215,35 @@ def complete_task(task_id):
                 "error": "Task is already completed"
             }), 400
 
-        completed_at = datetime.now(timezone.utc).isoformat()
+        completed_at = datetime.now(
+            timezone.utc
+        ).isoformat()
 
-        response = supabase.table("tasks").update({
-            "status": "completed",
-            "completed_at": completed_at
-        }).eq(
-            "id", task_id
-        ).execute()
+        response = (
+            supabase
+            .table("tasks")
+            .update({
+                "status": "completed",
+                "completed_at": completed_at
+            })
+            .eq("id", task_id)
+            .execute()
+        )
 
-        creator = supabase.table("profiles").select(
-            "email, full_name"
-        ).eq(
-            "id", task["created_by"]
-        ).single().execute()
+        creator = (
+            supabase
+            .table("profiles")
+            .select("email, full_name")
+            .eq("id", task["created_by"])
+            .single()
+            .execute()
+        )
 
         creator_email = creator.data["email"]
-        creator_name = creator.data.get("full_name") or "User"
+        creator_name = (
+            creator.data.get("full_name")
+            or "User"
+        )
 
         subject = "Task Completed - Hairdrama Task Manager"
 
@@ -211,8 +275,13 @@ Hairdrama Task Manager
         }), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(
+        debug=True,
+        port=5000
+    )
